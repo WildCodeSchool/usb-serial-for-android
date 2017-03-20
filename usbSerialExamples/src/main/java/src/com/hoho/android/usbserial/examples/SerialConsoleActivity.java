@@ -24,20 +24,26 @@ package com.hoho.android.usbserial.examples;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.Color;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
 import android.os.Bundle;
 import android.util.Log;
 import android.widget.CheckBox;
 import android.widget.CompoundButton;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import com.hoho.android.usbserial.driver.UsbSerialPort;
 import com.hoho.android.usbserial.util.HexDump;
 import com.hoho.android.usbserial.util.SerialInputOutputManager;
 
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -66,10 +72,10 @@ public class SerialConsoleActivity extends Activity {
     private TextView mTitleTextView;
     private TextView mDumpTextView;
     private ScrollView mScrollView;
-    private CheckBox chkDTR;
-    private CheckBox chkRTS;
 
     private final ExecutorService mExecutor = Executors.newSingleThreadExecutor();
+
+    private LocationManager mLocationManager;
 
     private SerialInputOutputManager mSerialIoManager;
 
@@ -99,29 +105,62 @@ public class SerialConsoleActivity extends Activity {
         mTitleTextView = (TextView) findViewById(R.id.demoTitle);
         mDumpTextView = (TextView) findViewById(R.id.consoleText);
         mScrollView = (ScrollView) findViewById(R.id.demoScroller);
-        chkDTR = (CheckBox) findViewById(R.id.checkBoxDTR);
-        chkRTS = (CheckBox) findViewById(R.id.checkBoxRTS);
-
-        chkDTR.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                try {
-                    sPort.setDTR(isChecked);
-                }catch (IOException x){}
-            }
-        });
-
-        chkRTS.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                try {
-                    sPort.setRTS(isChecked);
-                }catch (IOException x){}
-            }
-        });
-
+        mLocationManager = (LocationManager) super.getSystemService(Context.LOCATION_SERVICE);
     }
 
+    private final LocationListener mLocationListener = new LocationListener() {
+        @Override
+        public void onLocationChanged(final Location location) {
+            SerialConsoleActivity.this.runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (location != null) {
+                        mTitleTextView.setBackgroundColor(Color.GREEN);
+                    } else {
+                        mTitleTextView.setBackgroundColor(Color.RED);
+                    }
+                }
+            });
+            String loc = convertLocationToArduino(location);
+            if (loc != null) {
+                try {
+                    mSerialIoManager.writeAsync(loc.getBytes("US-ASCII"));
+                } catch (UnsupportedEncodingException e) {
+                    Log.e(TAG, e.toString());
+                }
+            }
+        }
+
+        @Override
+        public void onStatusChanged(String s, int i, Bundle bundle) {
+        }
+
+        @Override
+        public void onProviderEnabled(String s) {
+
+        }
+
+        @Override
+        public void onProviderDisabled(String s) {
+
+        }
+    };
+
+    private String convertLocationToArduino(Location loc) {
+        if (loc != null) {
+            long lat10E4 = (long) (loc.getLatitude() * 10e4);
+            long lon10E4 = (long) (loc.getLongitude() * 10e4);
+
+            Toast.makeText(this, String.format("%f,%f | %d,%d",
+                    loc.getLatitude(),
+                    loc.getLongitude(),
+                    lat10E4,
+                    lon10E4), Toast.LENGTH_SHORT).show();
+
+            return String.format("+CHECK_LOCATION=%d,%d", lat10E4, lon10E4);
+        }
+        return null;
+    }
 
     @Override
     protected void onPause() {
@@ -135,6 +174,7 @@ public class SerialConsoleActivity extends Activity {
             }
             sPort = null;
         }
+        mLocationManager.removeUpdates(mLocationListener);
         finish();
     }
 
@@ -184,6 +224,9 @@ public class SerialConsoleActivity extends Activity {
             mTitleTextView.setText("Serial device: " + sPort.getClass().getSimpleName());
         }
         onDeviceStateChange();
+
+        mLocationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 10 * 1000, 0, mLocationListener);
+        mLocationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 10 * 1000, 0, mLocationListener);
     }
 
     private void stopIoManager() {
@@ -208,8 +251,7 @@ public class SerialConsoleActivity extends Activity {
     }
 
     private void updateReceivedData(byte[] data) {
-        final String message = "Read " + data.length + " bytes: \n"
-                + HexDump.dumpHexString(data) + "\n\n";
+        final String message = new String(data) + "\n";
         mDumpTextView.append(message);
         mScrollView.smoothScrollTo(0, mDumpTextView.getBottom());
     }
